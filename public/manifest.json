@@ -1,0 +1,15 @@
+{
+  "name": "SI Entretien Pro",
+  "short_name": "SI Pro",
+  "description": "Système de gestion des ventes et opérations",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0A1628",
+  "theme_color": "#0A1628",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
