@@ -1,0 +1,23 @@
+name: 15-Minute Sync
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  call-sync-routes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Jobber Sync
+        run: |
+          curl -X GET "${{ secrets.BASE_URL }}/api/cron/jobber-sync" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --fail
+
+      - name: Call SR Sync
+        run: |
+          curl -X GET "${{ secrets.BASE_URL }}/api/cron/sr-sync" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --fail

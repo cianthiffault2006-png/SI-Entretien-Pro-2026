@@ -1,0 +1,17 @@
+name: Nightly Auto Clockout
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  call-auto-clockout:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Auto Clockout
+        run: |
+          curl -X GET "${{ secrets.BASE_URL }}/api/cron/auto-clockout" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            --fail

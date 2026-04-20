@@ -1,8 +1,0 @@
-{
-  "crons": [
-    { "path": "/api/cron/sr-sync",       "schedule": "*/5 * * * *"  },
-    { "path": "/api/cron/jobber-sync",   "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/auto-clockout", "schedule": "0 22 * * *"   },
-    { "path": "/api/cron/thursday-reminder", "schedule": "0 9 * * 4" }
-  ]
-}
