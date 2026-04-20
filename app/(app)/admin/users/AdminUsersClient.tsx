@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import type { Profile, Role } from '@/lib/types';
+import type { Profile } from '@/lib/types';
+type Role = Profile['role'];
 
 const ROLES: { value: Role; label: string; color: string }[] = [
   { value: 'admin',   label: 'Admin',   color: '#EF4444' },
