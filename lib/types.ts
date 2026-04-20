@@ -12,6 +12,8 @@ export const PING_CONFIG: Record<PingType, { label: string; hex: string }> = {
   never:     { label: 'Jamais',   hex: '#374151' },
 };
 
+export type Role = 'admin' | 'manager' | 'rep' | 'cleaner';
+
 export interface Profile {
   id: string;
   full_name: string;
@@ -129,6 +131,7 @@ export interface SalesLog {
   is_deleted: boolean;
   notes?: string;
   created_at: string;
+  profiles?: { full_name: string } | null;
 }
 
 // ─── SERVICES ────────────────────────────────────────────────────────────────
