@@ -1,0 +1,21 @@
+name: SI Entretien Pro — Jobber Sync
+
+on:
+  schedule:
+    # Jobber sync every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  jobber-sync:
+    name: Jobber Schedule Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Jobber sync
+        run: |
+          curl -s -f -X GET \
+            "${{ secrets.APP_URL }}/api/cron/jobber-sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 120 \
+            -o /dev/null \
+            -w "HTTP Status: %{http_code}\n"

@@ -1,0 +1,21 @@
+name: SI Entretien Pro — Live Sync
+
+on:
+  schedule:
+    # SR sync every 5 minutes
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+jobs:
+  sr-sync:
+    name: SalesRabbit Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger SR sync
+        run: |
+          curl -s -f -X GET \
+            "${{ secrets.APP_URL }}/api/cron/sr-sync?secret=${{ secrets.CRON_SECRET }}" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 120 \
+            -o /dev/null \
+            -w "HTTP Status: %{http_code}\n"
