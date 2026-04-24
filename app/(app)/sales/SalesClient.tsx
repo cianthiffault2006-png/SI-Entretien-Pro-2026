@@ -145,8 +145,8 @@ export default function SalesClient({ profile, initialLogs, repList, userId }: P
                   <div className="font-semibold text-sm text-white">
                     {new Date(l.log_date + 'T12:00:00').toLocaleDateString('fr-CA', { weekday: 'short', day: 'numeric', month: 'short' })}
                   </div>
-                  {isManager && l.profiles && (
-                    <div className="text-xs mt-0.5" style={{ color: '#6B8AA8' }}>{l.profiles.full_name}</div>
+                  {isManager && (l as any).profiles && (
+                    <div className="text-xs mt-0.5" style={{ color: '#6B8AA8' }}>{(l as any).profiles.full_name}</div>
                   )}
                   {l.notes && <div className="text-xs mt-1" style={{ color: '#3A6B8A' }}>{l.notes}</div>}
                 </div>
