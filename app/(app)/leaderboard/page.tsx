@@ -14,14 +14,23 @@ export default async function LeaderboardPage() {
     .select('*')
     .order('sr_closes', { ascending: false });
 
-  const { data: syncState } = await supabase.from('sync_state').select('value').eq('key', 'sr_last_sync').single();
+  const { data: payPeriods } = await supabase
+    .from('pay_periods')
+    .select('id, label, start_date, end_date')
+    .order('start_date', { ascending: false })
+    .limit(20);
+
+  // Find current period
+  const today = new Date().toISOString().split('T')[0];
+  const currentPeriod = (payPeriods || []).find(p => p.start_date <= today && p.end_date >= today);
 
   return (
     <LeaderboardClient
       profile={profile}
       userId={user.id}
       stats={stats || []}
-      lastSync={syncState?.value || null}
+      payPeriods={payPeriods || []}
+      currentPeriodId={currentPeriod?.id || null}
     />
   );
 }

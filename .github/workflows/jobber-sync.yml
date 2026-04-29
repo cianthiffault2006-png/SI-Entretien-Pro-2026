@@ -2,7 +2,6 @@ name: SI Entretien Pro — Jobber Sync
 
 on:
   schedule:
-    # Jobber sync every 15 minutes
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
@@ -10,12 +9,22 @@ jobs:
   jobber-sync:
     name: Jobber Schedule Sync
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Trigger Jobber sync
+      - name: Sync Jobber schedule
         run: |
-          curl -s -f -X GET \
-            "${{ secrets.APP_URL }}/api/cron/jobber-sync" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+          HTTP_STATUS=$(curl -s -o /tmp/jobber_response.txt -w "%{http_code}" \
             --max-time 120 \
-            -o /dev/null \
-            -w "HTTP Status: %{http_code}\n"
+            --retry 2 \
+            --retry-delay 10 \
+            -X GET "${{ secrets.APP_URL }}/api/cron/jobber-sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
+          
+          echo "HTTP Status: $HTTP_STATUS"
+          cat /tmp/jobber_response.txt
+          
+          if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "Jobber sync failed with status $HTTP_STATUS"
+            exit 1
+          fi
+          echo "Jobber sync successful"
