@@ -13,16 +13,13 @@ jobs:
     steps:
       - name: Sync SalesRabbit leads
         run: |
-          HTTP_STATUS=$(curl -s -o /tmp/sync_response.txt -w "%{http_code}" \
+          HTTP_STATUS=$(curl -s -L -o /tmp/sync_response.txt -w "%{http_code}" \
             --max-time 90 \
             --retry 2 \
             --retry-delay 5 \
-            -X GET "${{ secrets.APP_URL }}/api/cron/sr-sync?secret=${{ secrets.CRON_SECRET }}" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
-          
+            "${{ secrets.APP_URL }}/api/cron/sr-sync?secret=${{ secrets.CRON_SECRET }}")
           echo "HTTP Status: $HTTP_STATUS"
           cat /tmp/sync_response.txt
-          
           if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
             echo "Sync failed with status $HTTP_STATUS"
             exit 1

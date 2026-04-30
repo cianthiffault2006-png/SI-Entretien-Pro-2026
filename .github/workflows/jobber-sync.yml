@@ -13,16 +13,15 @@ jobs:
     steps:
       - name: Sync Jobber schedule
         run: |
-          HTTP_STATUS=$(curl -s -o /tmp/jobber_response.txt -w "%{http_code}" \
+          HTTP_STATUS=$(curl -s -L -o /tmp/jobber_response.txt -w "%{http_code}" \
             --max-time 120 \
             --retry 2 \
             --retry-delay 10 \
-            -X GET "${{ secrets.APP_URL }}/api/cron/jobber-sync" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}")
-          
+            -X POST "${{ secrets.APP_URL }}/api/jobber/sync" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}")
           echo "HTTP Status: $HTTP_STATUS"
           cat /tmp/jobber_response.txt
-          
           if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
             echo "Jobber sync failed with status $HTTP_STATUS"
             exit 1
