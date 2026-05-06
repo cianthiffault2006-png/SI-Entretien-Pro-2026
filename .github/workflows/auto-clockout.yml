@@ -1,0 +1,22 @@
+name: SI Entretien Pro — Auto Clock Out
+
+on:
+  schedule:
+    # 10pm Eastern = 2am UTC (EST) or 3am UTC (EDT)
+    # Run at both to cover DST transitions
+    - cron: '0 2 * * *'
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  auto-clockout:
+    name: Auto Clock Out Reps
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger auto clock out
+        run: |
+          curl -s -X GET \
+            "${{ secrets.APP_URL }}/api/cron/auto-clockout" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 30 \
+            -w "HTTP Status: %{http_code}\n"

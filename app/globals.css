@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-deep:    #0A1628;
+  --bg-card:    #0F1E35;
+  --bg-input:   #132D45;
+  --border:     #1E3A5F;
+  --text-main:  #E2EEF8;
+  --text-muted: #6B8AA8;
+  --blue:       #1B9EF3;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  background: var(--bg-deep);
+  color: var(--text-main);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Leaflet overrides */
+.leaflet-container { background: #0A1628; }
+.leaflet-tile { filter: brightness(0.7) saturate(0.8); }
+.leaflet-control-zoom a { background: #0F1E35 !important; color: #E2EEF8 !important; border-color: #1E3A5F !important; }
+.leaflet-popup-content-wrapper { background: #0F1E35; color: #E2EEF8; border: 1px solid #1E3A5F; border-radius: 10px; }
+.leaflet-popup-tip { background: #0F1E35; }
+.leaflet-draw-toolbar a { background: #0F1E35 !important; color: #E2EEF8 !important; }
+
+/* Input base */
+input, select, textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 100%;
+  outline: none;
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--blue); }
+input::placeholder { color: #3A5F80; }
+select option { background: #0F1E35; }
+
+/* Canvas for signatures */
+canvas.sig-pad {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  touch-action: none;
+  cursor: crosshair;
+  background: #fff;
+}
