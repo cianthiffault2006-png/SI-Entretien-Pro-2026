@@ -12,12 +12,12 @@ jobs:
     steps:
       - name: Call Jobber Sync
         run: |
-          curl -X GET "${{ secrets.BASE_URL }}/api/cron/jobber-sync" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+          curl -X GET "${{ secrets.APP_URL }}/api/cron/jobber-sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             --fail
 
       - name: Call SR Sync
         run: |
-          curl -X GET "${{ secrets.BASE_URL }}/api/cron/sr-sync" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+          curl -X GET "${{ secrets.APP_URL }}/api/cron/sr-sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             --fail
