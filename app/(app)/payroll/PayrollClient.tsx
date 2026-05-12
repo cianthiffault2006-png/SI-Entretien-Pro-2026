@@ -1,27 +1,28 @@
 'use client';
 import { useState } from 'react';
-import { createClient } from '@/lib/supabase';
 
 interface RepPaycheck {
   rep_id: string; full_name: string;
-  d2d_closes: number; recall_closes: number;
-  d2d_revenue: number; recall_revenue: number;
-  d2d_commission: number; recall_commission: number;
-  total_commission: number;        // expected (SR closes)
-  confirmed_commission: number;    // confirmed (Jobber completed matches)
-  d2d_rate: number; recall_rate: number; tier: string;
-  closes: any[];
-  null_prix_closes: number;
-  jobber_matched: number;
+  completed_jobs: number; scheduled_jobs: number;
+  confirmed_revenue: number; expected_revenue: number;
+  confirmed_commission: number; expected_commission: number;
+  d2d_rate: number; recall_rate: number;
+  tier: string; cumul_completed: number;
+  completed_details: any[];
+  scheduled_details: any[];
 }
 
 interface PeriodData {
   period: { id: string; label: string; start_date: string; end_date: string };
   repBreakdown: RepPaycheck[];
-  totalExpected: number;
   totalConfirmed: number;
-  totalCloses: number;
-  jobberJobs: number;
+  totalExpected: number;
+  totalConfirmedRevenue: number;
+  totalScheduledRevenue: number;
+  completedJobs: number;
+  scheduledJobs: number;
+  unmatchedCount: number;
+  unmatchedRevenue: number;
 }
 
 const TIER_COLORS: Record<string, string> = {
@@ -29,7 +30,12 @@ const TIER_COLORS: Record<string, string> = {
 };
 
 function fmt(n: number) {
-  return `$${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}`;
+  if (!n || isNaN(n)) return '$0.00';
+  return '$' + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+function fmtR(n: number) {
+  if (!n || isNaN(n)) return '$0';
+  return '$' + Math.round(n).toLocaleString('fr-CA');
 }
 
 export default function PayrollClient({
@@ -41,18 +47,13 @@ export default function PayrollClient({
   currentPeriodIndex: number;
   jobberAuthUrl: string;
 }) {
-  const supabase = createClient();
   const [idx, setIdx] = useState(currentPeriodIndex >= 0 ? currentPeriodIndex : 0);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<any>(null);
-  const [editingPrix, setEditingPrix] = useState<string | null>(null);
-  const [editVal, setEditVal] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [view, setView] = useState<'payroll' | 'clients'>('payroll');
 
   const current = periodPaychecks[idx];
   const neverSynced = jobberLastSync.startsWith('2020');
-  const isMe = (id: string) => id === userId;
+  const today = new Date().toISOString().split('T')[0];
 
   async function syncJobber() {
     setSyncing(true); setSyncResult(null);
@@ -60,27 +61,15 @@ export default function PayrollClient({
       const res = await fetch('/api/jobber/sync', { method: 'POST' });
       const d = await res.json();
       setSyncResult(d);
-    } catch (e: any) { setSyncResult({ error: e.message }); }
+      if (d.success) setTimeout(() => window.location.reload(), 1500);
+    } catch (e: any) { setSyncResult({ error: String(e.message) }); }
     setSyncing(false);
   }
 
-  async function savePrix(leadId: string) {
-    const prix = parseFloat(editVal);
-    if (isNaN(prix) || prix <= 0) return;
-    setSaving(true);
-    await supabase.from('leads').update({ prix }).eq('id', leadId);
-    setSaving(false);
-    setEditingPrix(null);
-    window.location.reload();
-  }
+  if (!periodPaychecks.length) return <div style={{ padding: 40, color: '#4A6A88', textAlign: 'center' }}>Aucune période</div>;
 
-  if (!periodPaychecks.length) {
-    return <div style={{ padding: 40, color: '#4A6A88', textAlign: 'center' }}>Aucune période configurée</div>;
-  }
-
-  const allCloses = current?.repBreakdown.flatMap(r =>
-    r.closes.map((c: any) => ({ ...c, rep_name: r.full_name, rep_rate: c.sale_type === 'recall' ? r.recall_rate : r.d2d_rate }))
-  ) || [];
+  const isPast = current?.period.end_date < today;
+  const isCurrent = current?.period.start_date <= today && current?.period.end_date >= today;
 
   return (
     <div style={{ padding: '16px 20px', maxWidth: 960, margin: '0 auto' }}>
@@ -91,18 +80,13 @@ export default function PayrollClient({
           <h1 style={{ fontSize: 20, fontWeight: 700, color: 'white', margin: 0 }}>Paie</h1>
           <div style={{ fontSize: 11, marginTop: 3 }}>
             {neverSynced
-              ? <span style={{ color: '#EF4444' }}>⚠️ Jobber jamais synchronisé — <a href={jobberAuthUrl} style={{ color: '#1B9EF3' }}>Connecter Jobber</a></span>
+              ? <span style={{ color: '#EF4444' }}>⚠️ Jobber non connecté — <a href={jobberAuthUrl} style={{ color: '#1B9EF3' }}>Connecter</a></span>
               : <span style={{ color: '#5A8AA8' }}>Jobber ✅ {new Date(jobberLastSync).toLocaleDateString('fr-CA', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}</span>
             }
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {neverSynced && (
-            <a href={jobberAuthUrl}
-               style={{ padding: '7px 12px', borderRadius: 8, background: '#F59E0B22', color: '#F59E0B', border: '1px solid #F59E0B55', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>
-              🔗 Connecter
-            </a>
-          )}
+          {neverSynced && <a href={jobberAuthUrl} style={{ padding: '7px 12px', borderRadius: 8, background: '#F59E0B22', color: '#F59E0B', border: '1px solid #F59E0B55', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>🔗 Connecter</a>}
           <button onClick={syncJobber} disabled={syncing}
                   style={{ padding: '7px 14px', borderRadius: 8, background: syncing ? '#132D45' : '#1B9EF322', color: '#1B9EF3', border: '1px solid #1B9EF355', fontSize: 12, fontWeight: 600, cursor: syncing ? 'default' : 'pointer' }}>
             {syncing ? '⌛ Sync...' : '🔄 Sync Jobber'}
@@ -114,10 +98,12 @@ export default function PayrollClient({
       {syncResult && (
         <div style={{ padding: '10px 14px', borderRadius: 8, background: syncResult.success ? '#0F2E1A' : '#2A0F0F', color: syncResult.success ? '#22C55E' : '#EF4444', border: `1px solid ${syncResult.success ? '#22C55E33' : '#EF444433'}`, fontSize: 12, marginBottom: 12 }}>
           {syncResult.needsAuth
-            ? <>❌ Jobber non connecté — <a href={jobberAuthUrl} style={{ color: '#1B9EF3' }}>Cliquer ici pour connecter</a></>
+            ? <>❌ Reconnecter Jobber — <a href={jobberAuthUrl} style={{ color: '#1B9EF3' }}>Cliquer ici</a></>
             : syncResult.success
-              ? `✅ ${syncResult.synced} jobs importés sur ${syncResult.total}`
-              : `❌ ${syncResult.error}${syncResult.detail ? ` — ${syncResult.detail}` : ''}`
+              ? <>✅ {syncResult.synced} jobs · ✓ {syncResult.completed} complétés · ⏳ {syncResult.scheduled} planifiés
+                {syncResult.jobberStatuses && <span style={{ color: '#5A8AA8', marginLeft: 8 }}>Statuts Jobber: {JSON.stringify(syncResult.jobberStatuses)}</span>}
+              </>
+              : `❌ ${syncResult.error}${syncResult.detail ? ' — ' + syncResult.detail : ''}`
           }
         </div>
       )}
@@ -125,15 +111,17 @@ export default function PayrollClient({
       {/* Period nav */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <button onClick={() => setIdx(i => Math.min(i + 1, periodPaychecks.length - 1))}
-                  disabled={idx >= periodPaychecks.length - 1}
+          <button onClick={() => setIdx(i => Math.min(i + 1, periodPaychecks.length - 1))} disabled={idx >= periodPaychecks.length - 1}
                   style={{ padding: '6px 14px', borderRadius: 8, background: '#132D45', border: '1px solid #1E3A5F', color: idx >= periodPaychecks.length - 1 ? '#3A5F80' : '#8BAEC8', cursor: 'pointer', fontSize: 14 }}>←</button>
           <div style={{ flex: 1, textAlign: 'center' }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'white' }}>{current?.period.label}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'white' }}>
+              {current?.period.label}
+              {isCurrent && <span style={{ fontSize: 11, color: '#22C55E', marginLeft: 8 }}>● En cours</span>}
+              {isPast && <span style={{ fontSize: 11, color: '#5A8AA8', marginLeft: 8 }}>Terminée</span>}
+            </div>
             <div style={{ fontSize: 11, color: '#5A8AA8', marginTop: 2 }}>{current?.period.start_date} → {current?.period.end_date}</div>
           </div>
-          <button onClick={() => setIdx(i => Math.max(i - 1, 0))}
-                  disabled={idx <= 0}
+          <button onClick={() => setIdx(i => Math.max(i - 1, 0))} disabled={idx <= 0}
                   style={{ padding: '6px 14px', borderRadius: 8, background: '#132D45', border: '1px solid #1E3A5F', color: idx <= 0 ? '#3A5F80' : '#8BAEC8', cursor: 'pointer', fontSize: 14 }}>→</button>
         </div>
         {idx !== currentPeriodIndex && currentPeriodIndex >= 0 && (
@@ -144,188 +132,112 @@ export default function PayrollClient({
         )}
       </div>
 
-      {/* View toggle */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        {(['payroll', 'clients'] as const).map(v => (
-          <button key={v} onClick={() => setView(v)}
-                  style={{ flex: 1, padding: '7px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', background: view === v ? '#1B9EF322' : '#132D45', color: view === v ? '#1B9EF3' : '#6B8AA8', border: `1px solid ${view === v ? '#1B9EF355' : '#1E3A5F'}` }}>
-            {v === 'payroll' ? '💰 Paychecks' : '👤 Par client'}
-          </button>
-        ))}
-      </div>
-
-      {!current ? null : view === 'payroll' ? (
+      {!current ? null : (
         <>
-          {/* 3-column summary: Expected / Confirmed / Jobs */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+          {/* Summary cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
             <div style={{ padding: '12px', borderRadius: 12, background: '#0F1E35', border: '1px solid #1E3A5F', textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: '#5A8AA8', fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>ATTENDU (SR)</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: '#F59E0B' }}>{fmt(current.totalExpected)}</div>
-              <div style={{ fontSize: 11, color: '#6B8AA8', marginTop: 2 }}>{current.totalCloses} closes</div>
+              <div style={{ fontSize: 10, color: '#5A8AA8', fontWeight: 700, letterSpacing: 0.8 }}>ATTENDU</div>
+              <div style={{ fontSize: 10, color: '#4A6A88', marginBottom: 4 }}>planifiés dans la période</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: '#F59E0B' }}>{fmtR(current.totalExpected)}</div>
+              <div style={{ fontSize: 11, color: '#6B8AA8' }}>{current.scheduledJobs + current.completedJobs} jobs · {fmtR(current.totalConfirmedRevenue + current.totalScheduledRevenue)} revenu</div>
             </div>
-            <div style={{ padding: '12px', borderRadius: 12, background: current.totalConfirmed > 0 ? '#0F2E1A' : '#0F1E35', border: `1px solid ${current.totalConfirmed > 0 ? '#22C55E33' : '#1E3A5F'}`, textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: '#5A8AA8', fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>CONFIRMÉ (Jobber)</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: current.totalConfirmed > 0 ? '#22C55E' : '#4A6A88' }}>
-                {current.totalConfirmed > 0 ? fmt(current.totalConfirmed) : '—'}
+            <div style={{ padding: '12px', borderRadius: 12, background: current.completedJobs > 0 ? '#0F2E1A' : '#0F1E35', border: `1px solid ${current.completedJobs > 0 ? '#22C55E33' : '#1E3A5F'}`, textAlign: 'center' }}>
+              <div style={{ fontSize: 10, color: '#5A8AA8', fontWeight: 700, letterSpacing: 0.8 }}>CONFIRMÉ</div>
+              <div style={{ fontSize: 10, color: '#4A6A88', marginBottom: 4 }}>jobs complétés Jobber</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: current.completedJobs > 0 ? '#22C55E' : '#4A6A88' }}>
+                {current.completedJobs > 0 ? fmtR(current.totalConfirmed) : '—'}
               </div>
-              <div style={{ fontSize: 11, color: '#6B8AA8', marginTop: 2 }}>{current.jobberJobs} jobs complétés</div>
+              <div style={{ fontSize: 11, color: '#6B8AA8' }}>{current.completedJobs} complétés · {fmtR(current.totalConfirmedRevenue)} revenu</div>
             </div>
-            <div style={{ padding: '12px', borderRadius: 12, background: '#0F1E35', border: '1px solid #1E3A5F', textAlign: 'center' }}>
-              <div style={{ fontSize: 10, color: '#5A8AA8', fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>FINAL (approuvé)</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: '#4A6A88' }}>—</div>
-              <div style={{ fontSize: 11, color: '#4A6A88', marginTop: 2 }}>à venir</div>
+            <div style={{ padding: '12px', borderRadius: 12, background: '#0F1E35', border: `1px solid ${current.unmatchedCount > 0 ? '#EF444433' : '#1E3A5F'}`, textAlign: 'center' }}>
+              <div style={{ fontSize: 10, color: '#5A8AA8', fontWeight: 700, letterSpacing: 0.8 }}>NON ASSIGNÉS</div>
+              <div style={{ fontSize: 10, color: '#4A6A88', marginBottom: 4 }}>pas de vendeur trouvé</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: current.unmatchedCount > 0 ? '#EF4444' : '#4A6A88' }}>
+                {current.unmatchedCount > 0 ? current.unmatchedCount : '✓'}
+              </div>
+              <div style={{ fontSize: 11, color: '#6B8AA8' }}>{current.unmatchedCount > 0 ? fmtR(current.unmatchedRevenue) + ' non assigné' : 'tous assignés'}</div>
             </div>
           </div>
 
-          {/* Jobber note */}
-          <div style={{ padding: '8px 14px', borderRadius: 8, background: '#0F1E35', border: '1px solid #1E3A5F', fontSize: 11, color: '#5A8AA8', marginBottom: 12 }}>
-            💡 <strong style={{ color: '#E2EEF8' }}>Attendu</strong> = closes SR avec RDV dans la période.
-            <strong style={{ color: '#22C55E' }}> Confirmé</strong> = jobs Jobber COMPLETED qui correspondent.
-            La différence indique des jobs pas encore complétés dans Jobber.
-          </div>
+          {current.unmatchedCount > 0 && (
+            <div style={{ padding: '8px 14px', borderRadius: 8, background: '#2A0F0F', border: '1px solid #EF444433', fontSize: 11, color: '#EF4444', marginBottom: 12 }}>
+              ⚠️ {current.unmatchedCount} jobs Jobber sans vendeur SR correspondant — adresse non trouvée dans SR. Ces jobs ne sont pas comptés dans les commissions.
+            </div>
+          )}
 
           {/* Rep paychecks */}
           {current.repBreakdown.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: '#4A6A88', background: '#0F1E35', borderRadius: 14, border: '1px solid #1E3A5F' }}>Aucun close dans cette période</div>
+            <div style={{ padding: 24, textAlign: 'center', color: '#4A6A88', background: '#0F1E35', borderRadius: 14, border: '1px solid #1E3A5F' }}>
+              Aucun job Jobber assigné à un vendeur dans cette période
+            </div>
           ) : (
             <div style={{ borderRadius: 14, overflow: 'hidden', border: '1px solid #1E3A5F' }}>
-              {current.repBreakdown.sort((a, b) => b.total_commission - a.total_commission).map((rep, i) => {
+              {current.repBreakdown.sort((a, b) => b.confirmed_commission - a.confirmed_commission).map((rep, i) => {
                 const tc = TIER_COLORS[rep.tier] || '#9CA3AF';
-                const missingPrix = rep.closes.filter((c: any) => !c.prix && c.appointment_date);
-                const d2dCloses = rep.closes.filter((c: any) => c.sale_type !== 'recall');
-                const recallCloses = rep.closes.filter((c: any) => c.sale_type === 'recall');
-                const confirmedDiff = rep.confirmed_commission - rep.total_commission;
+                const isMe = rep.rep_id === userId;
 
                 return (
                   <details key={rep.rep_id} style={{ borderBottom: i < current.repBreakdown.length - 1 ? '1px solid #0F1E30' : 'none' }}>
-                    <summary style={{ padding: '12px 14px', background: isMe(rep.rep_id) ? '#0D2E4A' : i % 2 === 0 ? '#0A1628' : '#0C1B30', cursor: 'pointer', listStyle: 'none' }}>
+                    <summary style={{ padding: '12px 14px', background: isMe ? '#0D2E4A' : i % 2 === 0 ? '#0A1628' : '#0C1B30', cursor: 'pointer', listStyle: 'none' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: isMe(rep.rep_id) ? '#1B9EF3' : 'white' }}>{rep.full_name}</div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: isMe ? '#1B9EF3' : 'white' }}>{rep.full_name}</div>
                           <div style={{ fontSize: 11, marginTop: 2 }}>
-                            <span style={{ color: '#22C55E' }}>{rep.d2d_closes} D2D</span>
-                            {rep.recall_closes > 0 && <span style={{ color: '#A78BFA', marginLeft: 8 }}>{rep.recall_closes} rappels</span>}
-                            <span style={{ color: tc, marginLeft: 8 }}>{rep.tier} · {(rep.d2d_rate*100).toFixed(1)}%</span>
-                            {missingPrix.length > 0 && <span style={{ color: '#EF4444', marginLeft: 8 }}>⚠️ {missingPrix.length} prix manquants</span>}
+                            <span style={{ color: '#22C55E' }}>✓ {rep.completed_jobs} complétés</span>
+                            {rep.scheduled_jobs > 0 && <span style={{ color: '#F59E0B', marginLeft: 8 }}>⏳ {rep.scheduled_jobs} planifiés</span>}
+                            <span style={{ color: tc, marginLeft: 8 }}>{rep.tier} · {(rep.d2d_rate*100).toFixed(1)}% · #{rep.cumul_completed} total</span>
                           </div>
-                          {/* Transparent math */}
                           <div style={{ fontSize: 10, color: '#4A6A88', marginTop: 2 }}>
-                            D2D: {fmt(rep.d2d_revenue)} × {(rep.d2d_rate*100).toFixed(1)}% = {fmt(rep.d2d_commission)}
-                            {rep.recall_closes > 0 && <> + Rappels: {fmt(rep.recall_revenue)} × {(rep.recall_rate*100).toFixed(1)}% = {fmt(rep.recall_commission)}</>}
+                            Confirmé: {fmtR(rep.confirmed_revenue)} × {(rep.d2d_rate*100).toFixed(1)}% = {fmt(rep.confirmed_commission)}
                           </div>
                         </div>
                         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                          {/* Expected */}
-                          <div style={{ fontSize: 12, color: '#F59E0B', fontWeight: 700 }}>{fmt(rep.total_commission)} <span style={{ fontSize: 10, color: '#5A8AA8' }}>attendu</span></div>
-                          {/* Confirmed */}
-                          {rep.confirmed_commission > 0 && (
-                            <div style={{ fontSize: 12, color: '#22C55E', fontWeight: 700 }}>
-                              {fmt(rep.confirmed_commission)} <span style={{ fontSize: 10, color: '#5A8AA8' }}>confirmé</span>
-                            </div>
-                          )}
-                          {/* Gap warning */}
-                          {rep.confirmed_commission > 0 && Math.abs(confirmedDiff) > 1 && (
-                            <div style={{ fontSize: 10, color: confirmedDiff > 0 ? '#22C55E' : '#EF4444' }}>
-                              {confirmedDiff > 0 ? '+' : ''}{fmt(confirmedDiff)} vs attendu
-                            </div>
-                          )}
-                          {missingPrix.length > 0 && (
-                            <div style={{ fontSize: 10, color: '#EF4444' }}>+{missingPrix.length} non comptés</div>
-                          )}
+                          <div style={{ fontSize: 20, fontWeight: 700, color: '#22C55E' }}>{fmt(rep.confirmed_commission)}</div>
+                          <div style={{ fontSize: 11, color: '#F59E0B' }}>+ {fmt(rep.expected_commission - rep.confirmed_commission)} si tous complétés</div>
                         </div>
                       </div>
                     </summary>
 
-                    {/* Expanded close list */}
                     <div style={{ background: '#070E1A', borderTop: '1px solid #1E3A5F22' }}>
-                      {d2dCloses.length > 0 && (<>
+                      {/* Completed jobs */}
+                      {rep.completed_details.length > 0 && (<>
                         <div style={{ padding: '5px 14px', fontSize: 10, color: '#22C55E', fontWeight: 700, background: '#0A1628' }}>
-                          🚪 D2D — {fmt(rep.d2d_revenue)} × {(rep.d2d_rate*100).toFixed(1)}% = {fmt(rep.d2d_commission)}
+                          ✓ COMPLÉTÉS — {fmtR(rep.confirmed_revenue)} → {fmt(rep.confirmed_commission)}
                         </div>
-                        {d2dCloses.map((c: any, ci: number) => {
-                          const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || 'Inconnu';
-                          const missing = !c.prix;
-                          const isEditing = editingPrix === c.id;
-                          return (
-                            <div key={ci} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 14px 5px 22px', borderTop: '1px solid #0F1E30', fontSize: 11, background: missing ? '#1A0A0A' : 'transparent' }}>
-                              <span style={{ flex: 1, color: missing ? '#EF4444' : '#C2D4E8', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                                {missing ? '⚠️ ' : ''}{name}
-                                <span style={{ color: '#3A5F80', fontSize: 10, marginLeft: 6 }}>{c.appointment_date}</span>
-                                {c.jobber_matched && <span style={{ color: '#22C55E', fontSize: 10, marginLeft: 4 }}>✓ Jobber</span>}
-                              </span>
-                              {isEditing ? (
-                                <span style={{ display: 'flex', gap: 4 }}>
-                                  <input value={editVal} onChange={e => setEditVal(e.target.value)} placeholder="$"
-                                         style={{ width: 60, padding: '2px 6px', borderRadius: 4, background: '#132D45', border: '1px solid #1B9EF3', color: 'white', fontSize: 11 }} />
-                                  <button onClick={() => savePrix(c.id)} disabled={saving}
-                                          style={{ padding: '2px 8px', borderRadius: 4, background: '#22C55E', color: 'white', border: 'none', fontSize: 11, cursor: 'pointer' }}>
-                                    {saving ? '…' : '✓'}
-                                  </button>
-                                  <button onClick={() => setEditingPrix(null)}
-                                          style={{ padding: '2px 6px', borderRadius: 4, background: '#132D45', color: '#6B8AA8', border: 'none', fontSize: 11, cursor: 'pointer' }}>✕</button>
-                                </span>
-                              ) : missing ? (
-                                <button onClick={() => { setEditingPrix(c.id); setEditVal(''); }}
-                                        style={{ padding: '2px 8px', borderRadius: 4, background: '#EF444422', border: '1px solid #EF444444', color: '#EF4444', fontSize: 11, cursor: 'pointer' }}>
-                                  + Prix
-                                </button>
-                              ) : (
-                                <span>
-                                  <span style={{ color: '#1B9EF3' }}>{fmt(parseFloat(c.prix))}</span>
-                                  <span style={{ color: '#22C55E', marginLeft: 6 }}>→ {fmt(parseFloat(c.prix) * rep.d2d_rate)}</span>
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
+                        {rep.completed_details.map((j: any, ci: number) => (
+                          <div key={ci} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 14px 5px 22px', borderTop: '1px solid #0F1E30', fontSize: 11 }}>
+                            <span style={{ flex: 1, color: '#C2D4E8', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                              {j.client_nom}
+                              <span style={{ color: j.sale_type==='recall'?'#A78BFA':'#22C55E', marginLeft: 6, fontSize: 10 }}>{j.sale_type==='recall'?'Rappel':'D2D'}</span>
+                            </span>
+                            <span>
+                              <span style={{ color: '#1B9EF3' }}>{fmt(parseFloat(j.prix_final)||0)}</span>
+                              <span style={{ color: '#22C55E', marginLeft: 6 }}>→ {fmt((parseFloat(j.prix_final)||0) * (j.sale_type==='recall'?rep.recall_rate:rep.d2d_rate))}</span>
+                            </span>
+                          </div>
+                        ))}
                       </>)}
 
-                      {recallCloses.length > 0 && (<>
-                        <div style={{ padding: '5px 14px', fontSize: 10, color: '#A78BFA', fontWeight: 700, background: '#0A1628', borderTop: '1px solid #1E3A5F11' }}>
-                          📞 RAPPELS — {fmt(rep.recall_revenue)} → {fmt(rep.recall_commission)}
+                      {/* Scheduled jobs */}
+                      {rep.scheduled_details.length > 0 && (<>
+                        <div style={{ padding: '5px 14px', fontSize: 10, color: '#F59E0B', fontWeight: 700, background: '#0A1628', borderTop: '1px solid #1E3A5F11' }}>
+                          ⏳ PLANIFIÉS — {fmtR(rep.scheduled_details.reduce((s: number, j: any) => s + (parseFloat(j.prix_final)||0), 0))} attendu
                         </div>
-                        {recallCloses.map((c: any, ci: number) => {
-                          const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || 'Inconnu';
-                          const missing = !c.prix;
-                          const isEditing = editingPrix === c.id;
-                          return (
-                            <div key={ci} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 14px 5px 22px', borderTop: '1px solid #0F1E30', fontSize: 11, background: missing ? '#1A0A0A' : 'transparent' }}>
-                              <span style={{ flex: 1, color: missing ? '#EF4444' : '#C2D4E8', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                                {missing ? '⚠️ ' : ''}{name}
-                                <span style={{ color: '#3A5F80', fontSize: 10, marginLeft: 6 }}>{c.appointment_date}</span>
-                              </span>
-                              {isEditing ? (
-                                <span style={{ display: 'flex', gap: 4 }}>
-                                  <input value={editVal} onChange={e => setEditVal(e.target.value)} placeholder="$"
-                                         style={{ width: 60, padding: '2px 6px', borderRadius: 4, background: '#132D45', border: '1px solid #1B9EF3', color: 'white', fontSize: 11 }} />
-                                  <button onClick={() => savePrix(c.id)} disabled={saving}
-                                          style={{ padding: '2px 8px', borderRadius: 4, background: '#22C55E', color: 'white', border: 'none', fontSize: 11, cursor: 'pointer' }}>
-                                    {saving ? '…' : '✓'}
-                                  </button>
-                                  <button onClick={() => setEditingPrix(null)}
-                                          style={{ padding: '2px 6px', borderRadius: 4, background: '#132D45', color: '#6B8AA8', border: 'none', fontSize: 11, cursor: 'pointer' }}>✕</button>
-                                </span>
-                              ) : missing ? (
-                                <button onClick={() => { setEditingPrix(c.id); setEditVal(''); }}
-                                        style={{ padding: '2px 8px', borderRadius: 4, background: '#EF444422', border: '1px solid #EF444444', color: '#EF4444', fontSize: 11, cursor: 'pointer' }}>
-                                  + Prix
-                                </button>
-                              ) : (
-                                <span>
-                                  <span style={{ color: '#A78BFA' }}>{fmt(parseFloat(c.prix))}</span>
-                                  <span style={{ color: '#22C55E', marginLeft: 6 }}>→ {fmt(parseFloat(c.prix) * rep.recall_rate)}</span>
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
+                        {rep.scheduled_details.map((j: any, ci: number) => (
+                          <div key={ci} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 14px 5px 22px', borderTop: '1px solid #0F1E30', fontSize: 11 }}>
+                            <span style={{ flex: 1, color: '#8BAEC8', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                              {j.client_nom}
+                              <span style={{ color: '#5A8AA8', marginLeft: 6, fontSize: 10 }}>{j.date}</span>
+                            </span>
+                            <span style={{ color: '#8BAEC8' }}>{fmt(parseFloat(j.prix_final)||0)}</span>
+                          </div>
+                        ))}
                       </>)}
 
                       <div style={{ padding: '8px 14px', borderTop: '1px solid #1E3A5F11', display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: 11, color: rep.null_prix_closes > 0 ? '#EF4444' : '#4A6A88' }}>
-                          {rep.null_prix_closes > 0 ? `⚠️ ${rep.null_prix_closes} prix manquants — montant incomplet` : ''}
-                        </span>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: '#F59E0B' }}>Attendu: {fmt(rep.total_commission)}</span>
+                        <span style={{ fontSize: 11, color: '#4A6A88' }}>Palier actuel: {rep.tier} ({rep.cumul_completed} jobs complétés au total)</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#22C55E' }}>Paycheck: {fmt(rep.confirmed_commission)}</span>
                       </div>
                     </div>
                   </details>
@@ -335,45 +247,13 @@ export default function PayrollClient({
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: '#132D45', fontSize: 12, fontWeight: 700 }}>
                 <span style={{ color: '#8BAEC8' }}>Total période</span>
                 <div style={{ display: 'flex', gap: 16 }}>
-                  <span style={{ color: '#F59E0B' }}>{fmt(current.totalExpected)} attendu</span>
-                  {current.totalConfirmed > 0 && <span style={{ color: '#22C55E' }}>{fmt(current.totalConfirmed)} confirmé</span>}
+                  <span style={{ color: '#22C55E' }}>{fmt(current.totalConfirmed)} confirmé</span>
+                  <span style={{ color: '#F59E0B' }}>{fmt(current.totalExpected)} si tout complété</span>
                 </div>
               </div>
             </div>
           )}
         </>
-      ) : (
-        /* CLIENT VIEW */
-        <div>
-          <div style={{ fontSize: 11, color: '#5A8AA8', marginBottom: 10 }}>
-            {allCloses.filter((c: any) => c.prix).length} clients · {fmt(allCloses.reduce((s: number, c: any) => s + (parseFloat(c.prix) || 0), 0))} revenu · {fmt(allCloses.reduce((s: number, c: any) => s + (parseFloat(c.prix) || 0) * (c.rep_rate || 0), 0))} commissions
-          </div>
-          <div style={{ borderRadius: 14, overflow: 'hidden', border: '1px solid #1E3A5F' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px 80px 80px', padding: '8px 14px', background: '#132D45', fontSize: 11, color: '#5A8AA8', fontWeight: 700, gap: 8 }}>
-              <span>Client</span><span style={{ textAlign:'right' }}>Type</span><span style={{ textAlign:'right' }}>Prix</span><span style={{ textAlign:'right' }}>Comm.</span><span style={{ textAlign:'right' }}>Vendeur</span>
-            </div>
-            {allCloses.sort((a: any, b: any) => (parseFloat(b.prix)||0) - (parseFloat(a.prix)||0)).map((c: any, i: number) => {
-              const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || 'Inconnu';
-              const prix = parseFloat(c.prix) || 0;
-              const comm = prix * (c.rep_rate || 0);
-              return (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px 80px 80px', padding: '8px 14px', borderTop: '1px solid #0F1E30', background: i%2===0?'#0A1628':'#0C1B30', gap: 8, alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: 'white', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{name}</div>
-                    <div style={{ fontSize: 10, color: '#3A5F80', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{c.address}</div>
-                  </div>
-                  <span style={{ fontSize: 11, color: c.sale_type==='recall'?'#A78BFA':'#22C55E', textAlign:'right' }}>{c.sale_type==='recall'?'Rappel':'D2D'}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: prix?'#1B9EF3':'#EF4444', textAlign:'right' }}>{prix?fmt(prix):'⚠️ —'}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: comm?'#22C55E':'#4A6A88', textAlign:'right' }}>{comm?fmt(comm):'—'}</span>
-                  <span style={{ fontSize: 10, color: '#6B8AA8', textAlign:'right' }}>{c.rep_name?.split(' ')[0]}</span>
-                </div>
-              );
-            })}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px 90px 80px 80px', padding: '10px 14px', background: '#132D45', gap: 8, fontSize: 12, fontWeight: 700 }}>
-              <span style={{ color: '#8BAEC8' }}>TOTAL</span><span /><span style={{ color: '#1B9EF3', textAlign:'right' }}>{fmt(allCloses.reduce((s:number,c:any)=>s+(parseFloat(c.prix)||0),0))}</span><span style={{ color: '#22C55E', textAlign:'right' }}>{fmt(allCloses.reduce((s:number,c:any)=>s+(parseFloat(c.prix)||0)*(c.rep_rate||0),0))}</span><span />
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
