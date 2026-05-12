@@ -6,51 +6,59 @@ const SB_SVC = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const CRON_SECRET = process.env.CRON_SECRET;
 const JOBBER_CLIENT_ID = process.env.JOBBER_CLIENT_ID!;
 const JOBBER_CLIENT_SECRET = process.env.JOBBER_CLIENT_SECRET!;
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://si-entretien-pro-2026.vercel.app';
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://si-entretien-pro.vercel.app';
 
-async function getValidToken(sb: any): Promise<{ token: string | null; error?: string }> {
+// Jobber tokens expire in 60 minutes — always refresh before syncing
+async function refreshAndGetToken(sb: any): Promise<{ token: string | null; error?: string }> {
   const { data: row } = await sb.from('oauth_tokens').select('*').eq('id', 'jobber').single();
 
   if (!row) {
-    return { token: null, error: `NOT_CONNECTED:${APP_URL}/api/jobber/authorize` };
+    return { token: null, error: `NOT_CONNECTED — Connecter Jobber d'abord: ${APP_URL}/api/jobber/authorize` };
   }
 
-  // Check expiry (refresh 5 min before expiry)
-  const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
-  const needsRefresh = expiresAt && expiresAt.getTime() - Date.now() < 5 * 60 * 1000;
-
-  if (needsRefresh && row.refresh_token) {
-    const res = await fetch('https://api.getjobber.com/api/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: JOBBER_CLIENT_ID,
-        client_secret: JOBBER_CLIENT_SECRET,
-        grant_type: 'refresh_token',
-        refresh_token: row.refresh_token,
-      }),
-    });
-    const data = await res.json();
-    if (data.access_token) {
-      await sb.from('oauth_tokens').update({
-        access_token: data.access_token,
-        refresh_token: data.refresh_token || row.refresh_token,
-        expires_at: data.expires_in ? new Date(Date.now() + data.expires_in * 1000).toISOString() : null,
-        updated_at: new Date().toISOString(),
-      }).eq('id', 'jobber');
-      return { token: data.access_token };
-    }
+  if (!row.refresh_token) {
+    // No refresh token — need to reconnect
+    await sb.from('oauth_tokens').delete().eq('id', 'jobber');
+    return { token: null, error: `Token expiré sans refresh token. Reconnecter Jobber: ${APP_URL}/api/jobber/authorize` };
   }
 
-  return { token: row.access_token };
+  // Always try to refresh (tokens last 60min, safer to always refresh)
+  const res = await fetch('https://api.getjobber.com/api/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: JOBBER_CLIENT_ID,
+      client_secret: JOBBER_CLIENT_SECRET,
+      grant_type: 'refresh_token',
+      refresh_token: row.refresh_token,
+    }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok || !data.access_token) {
+    // Refresh failed — need to reconnect
+    await sb.from('oauth_tokens').delete().eq('id', 'jobber');
+    return { token: null, error: `Refresh token invalide. Reconnecter Jobber: ${APP_URL}/api/jobber/authorize`, needsAuth: true };
+  }
+
+  // Save new tokens
+  await sb.from('oauth_tokens').update({
+    access_token: data.access_token,
+    refresh_token: data.refresh_token || row.refresh_token,
+    expires_at: new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('id', 'jobber');
+
+  return { token: data.access_token };
 }
 
 async function runSync() {
   const sb = adminClient(SB_URL, SB_SVC);
-  const { token, error: tokenError } = await getValidToken(sb);
+  const { token, error: tokenError, needsAuth } = await refreshAndGetToken(sb) as any;
 
   if (!token) {
-    return { error: tokenError || 'No Jobber token. Connect Jobber first.', needsAuth: true };
+    return { error: tokenError, needsAuth: needsAuth ?? true };
   }
 
   const syncStart = new Date().toISOString();
@@ -77,7 +85,7 @@ async function runSync() {
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'X-JOBBER-GRAPHQL-VERSION': '2024-05-14',
+      'X-JOBBER-GRAPHQL-VERSION': '2023-11-15',
     },
     body: JSON.stringify({ query }),
   });
@@ -85,26 +93,26 @@ async function runSync() {
   const rawText = await gqlRes.text();
 
   if (!gqlRes.ok) {
-    // If 401, token may be stale — clear it
-    if (gqlRes.status === 401) {
-      await sb.from('oauth_tokens').delete().eq('id', 'jobber');
-    }
     return {
       error: `Jobber API ${gqlRes.status}`,
-      detail: rawText.slice(0, 300),
+      detail: rawText.slice(0, 400),
       needsAuth: gqlRes.status === 401,
     };
   }
 
-  const gqlData = JSON.parse(rawText);
+  let gqlData: any;
+  try { gqlData = JSON.parse(rawText); }
+  catch { return { error: 'Non-JSON response from Jobber', detail: rawText.slice(0, 200) }; }
+
   if (gqlData.errors) {
-    return { error: 'GraphQL error', detail: JSON.stringify(gqlData.errors).slice(0, 300) };
+    return { error: 'GraphQL errors', detail: JSON.stringify(gqlData.errors).slice(0, 400) };
   }
 
   const jobs = gqlData?.data?.jobs?.nodes || [];
+
   if (!jobs.length) {
     await sb.from('sync_state').upsert({ key: 'jobber_last_sync', value: syncStart });
-    return { success: true, synced: 0, message: 'No jobs returned from Jobber' };
+    return { success: true, synced: 0, message: 'Jobber returned 0 jobs' };
   }
 
   const { data: adminProfile } = await sb.from('profiles').select('id').eq('role', 'admin').limit(1).single();
@@ -135,7 +143,6 @@ async function runSync() {
       const addr = client.billingAddress;
       const clientName = client.name || [client.firstName, client.lastName].filter(Boolean).join(' ') || job.title || 'Client Jobber';
       const addrStr = addr ? [addr.street, addr.city, addr.province].filter(Boolean).join(', ') : '';
-      const isCompleted = job.jobStatus === 'COMPLETED';
 
       const { error: upsertErr } = await sb.from('bookings').upsert({
         jobber_job_id: String(job.id),
@@ -151,7 +158,7 @@ async function runSync() {
         prix_final: job.total ? parseFloat(String(job.total)) : null,
         rep_id: adminProfile?.id || null,
         cleaner_ids: [],
-        status: isCompleted ? 'completed' : 'scheduled',
+        status: job.jobStatus === 'COMPLETED' ? 'completed' : 'scheduled',
       }, { onConflict: 'jobber_job_id' });
 
       if (upsertErr) errors.push(`Job ${job.jobNumber}: ${upsertErr.message}`);
@@ -162,7 +169,15 @@ async function runSync() {
   }
 
   await sb.from('sync_state').upsert({ key: 'jobber_last_sync', value: syncStart });
-  return { success: true, synced, total: jobs.length, errors: errors.slice(0, 5), lastSync: syncStart };
+
+  return {
+    success: true,
+    synced,
+    total: jobs.length,
+    completed: jobs.filter((j: any) => j.jobStatus === 'COMPLETED').length,
+    errors: errors.length ? errors.slice(0, 5) : undefined,
+    lastSync: syncStart,
+  };
 }
 
 export async function GET(req: Request) {
