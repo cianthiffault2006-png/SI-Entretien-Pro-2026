@@ -64,13 +64,13 @@ async function runSync() {
   const syncStart = new Date().toISOString();
 
   const query = `query {
-    jobs(filter: { updatedAt: { gt: "2025-01-01T00:00:00Z" } }, first: 500) {
+    jobs(first: 500) {
       nodes {
         id jobNumber title total jobStatus createdAt
         client {
           name firstName lastName
-          primaryPhone { friendly }
-          primaryEmail
+          phones { number description }
+          emails { address description }
           billingAddress { street city province postalCode }
         }
         visits(first: 1) {
@@ -151,8 +151,8 @@ async function runSync() {
         slot_start_index: slotIndex(hour),
         duration_hours: durH,
         client_nom: clientName,
-        client_telephone: client.primaryPhone?.friendly || null,
-        client_email: client.primaryEmail || null,
+        client_telephone: client.phones?.[0]?.number || null,
+        client_email: client.emails?.[0]?.address || null,
         client_adresse: addrStr || null,
         services: [],
         prix_final: job.total ? parseFloat(String(job.total)) : null,
