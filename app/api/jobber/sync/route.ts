@@ -8,21 +8,19 @@ const JOBBER_CLIENT_ID = process.env.JOBBER_CLIENT_ID!;
 const JOBBER_CLIENT_SECRET = process.env.JOBBER_CLIENT_SECRET!;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://si-entretien-pro.vercel.app';
 
-// Jobber tokens expire in 60 minutes — always refresh before syncing
 async function refreshAndGetToken(sb: any): Promise<{ token: string | null; error?: string; needsAuth?: boolean }> {
   const { data: row } = await sb.from('oauth_tokens').select('*').eq('id', 'jobber').single();
 
   if (!row) {
-    return { token: null, error: `NOT_CONNECTED — Connecter Jobber d'abord: ${APP_URL}/api/jobber/authorize` };
+    return { token: null, error: `Non connecté. Connecter Jobber: ${APP_URL}/api/jobber/authorize`, needsAuth: true };
   }
 
   if (!row.refresh_token) {
-    // No refresh token — need to reconnect
     await sb.from('oauth_tokens').delete().eq('id', 'jobber');
-    return { token: null, error: `Token expiré sans refresh token. Reconnecter Jobber: ${APP_URL}/api/jobber/authorize` };
+    return { token: null, error: 'Token expiré. Reconnecter Jobber.', needsAuth: true };
   }
 
-  // Always try to refresh (tokens last 60min, safer to always refresh)
+  // Always refresh — tokens expire in 60 minutes
   const res = await fetch('https://api.getjobber.com/api/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -37,12 +35,10 @@ async function refreshAndGetToken(sb: any): Promise<{ token: string | null; erro
   const data = await res.json();
 
   if (!res.ok || !data.access_token) {
-    // Refresh failed — need to reconnect
     await sb.from('oauth_tokens').delete().eq('id', 'jobber');
-    return { token: null, error: `Refresh token invalide. Reconnecter Jobber: ${APP_URL}/api/jobber/authorize`, needsAuth: true };
+    return { token: null, error: 'Refresh token invalide. Reconnecter Jobber.', needsAuth: true };
   }
 
-  // Save new tokens
   await sb.from('oauth_tokens').update({
     access_token: data.access_token,
     refresh_token: data.refresh_token || row.refresh_token,
@@ -53,66 +49,106 @@ async function refreshAndGetToken(sb: any): Promise<{ token: string | null; erro
   return { token: data.access_token };
 }
 
+// Jobber GraphQL with retry on throttle
+async function jobberQuery(token: string, query: string, retries = 3): Promise<any> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const res = await fetch('https://api.getjobber.com/api/graphql', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-JOBBER-GRAPHQL-VERSION': '2023-11-15',
+      },
+      body: JSON.stringify({ query }),
+    });
+
+    const text = await res.text();
+
+    if (res.status === 429 || text.includes('THROTTLED')) {
+      // Wait before retry: 2s, 4s, 8s
+      const wait = Math.pow(2, attempt + 1) * 1000;
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+
+    if (!res.ok) {
+      return { httpError: res.status, detail: text.slice(0, 400) };
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      // Check for throttle in GraphQL errors
+      if (parsed.errors?.some((e: any) => e.extensions?.code === 'THROTTLED')) {
+        const wait = Math.pow(2, attempt + 1) * 1000;
+        await new Promise(r => setTimeout(r, wait));
+        continue;
+      }
+      return parsed;
+    } catch {
+      return { parseError: text.slice(0, 200) };
+    }
+  }
+
+  return { error: 'Throttled after retries — try again in a minute' };
+}
+
 async function runSync() {
   const sb = adminClient(SB_URL, SB_SVC);
   const { token, error: tokenError, needsAuth } = await refreshAndGetToken(sb);
 
-  if (!token) {
-    return { error: tokenError, needsAuth: needsAuth ?? true };
-  }
+  if (!token) return { error: tokenError, needsAuth: needsAuth ?? true };
 
   const syncStart = new Date().toISOString();
 
-  const query = `query {
-    jobs(first: 500) {
-      nodes {
-        id jobNumber title total jobStatus createdAt
-        client {
-          name firstName lastName
-          phones { number description }
-          emails { address description }
-          billingAddress { street city province postalCode }
+  // Low-cost query: minimal fields, cursor pagination, 50 at a time
+  let allJobs: any[] = [];
+  let cursor: string | null = null;
+  let page = 0;
+
+  while (page < 10) { // max 500 jobs (10 pages × 50)
+    const paginationArg = cursor ? `, after: "${cursor}"` : '';
+    const query = `query {
+      jobs(first: 50${paginationArg}) {
+        nodes {
+          id jobNumber title total jobStatus
+          client {
+            name
+            billingAddress { street city province }
+          }
+          visits(first: 1) {
+            nodes { startAt endAt }
+          }
         }
-        visits(first: 1) {
-          nodes { id startAt endAt }
-        }
+        pageInfo { hasNextPage endCursor }
       }
+    }`;
+
+    const data = await jobberQuery(token, query);
+
+    if (data.error || data.httpError || data.parseError) {
+      return { error: data.error || `HTTP ${data.httpError}`, detail: data.detail || data.parseError };
     }
-  }`;
 
-  const gqlRes = await fetch('https://api.getjobber.com/api/graphql', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'X-JOBBER-GRAPHQL-VERSION': '2023-11-15',
-    },
-    body: JSON.stringify({ query }),
-  });
+    if (data.errors) {
+      return { error: 'GraphQL errors', detail: JSON.stringify(data.errors).slice(0, 400) };
+    }
 
-  const rawText = await gqlRes.text();
+    const jobsPage = data?.data?.jobs;
+    if (!jobsPage) break;
 
-  if (!gqlRes.ok) {
-    return {
-      error: `Jobber API ${gqlRes.status}`,
-      detail: rawText.slice(0, 400),
-      needsAuth: gqlRes.status === 401,
-    };
+    allJobs = allJobs.concat(jobsPage.nodes || []);
+
+    if (!jobsPage.pageInfo?.hasNextPage) break;
+    cursor = jobsPage.pageInfo.endCursor;
+    page++;
+
+    // Small delay between pages to avoid throttling
+    await new Promise(r => setTimeout(r, 300));
   }
 
-  let gqlData: any;
-  try { gqlData = JSON.parse(rawText); }
-  catch { return { error: 'Non-JSON response from Jobber', detail: rawText.slice(0, 200) }; }
-
-  if (gqlData.errors) {
-    return { error: 'GraphQL errors', detail: JSON.stringify(gqlData.errors).slice(0, 400) };
-  }
-
-  const jobs = gqlData?.data?.jobs?.nodes || [];
-
-  if (!jobs.length) {
+  if (!allJobs.length) {
     await sb.from('sync_state').upsert({ key: 'jobber_last_sync', value: syncStart });
-    return { success: true, synced: 0, message: 'Jobber returned 0 jobs' };
+    return { success: true, synced: 0, message: 'Aucun job dans Jobber' };
   }
 
   const { data: adminProfile } = await sb.from('profiles').select('id').eq('role', 'admin').limit(1).single();
@@ -129,19 +165,18 @@ async function runSync() {
   let synced = 0;
   const errors: string[] = [];
 
-  for (const job of jobs) {
+  for (const job of allJobs) {
     try {
       const visit = job.visits?.nodes?.[0];
-      const startAt = visit?.startAt ? new Date(visit.startAt) : job.createdAt ? new Date(job.createdAt) : null;
-      if (!startAt) continue;
+      if (!visit?.startAt) continue;
 
-      const endAt = visit?.endAt ? new Date(visit.endAt) : new Date(startAt.getTime() + 7200000);
+      const startAt = new Date(visit.startAt);
+      const endAt = visit.endAt ? new Date(visit.endAt) : new Date(startAt.getTime() + 7200000);
       const durH = Math.min(Math.max(Math.round((endAt.getTime() - startAt.getTime()) / 3600000), 1), 8);
       const date = startAt.toISOString().split('T')[0];
       const hour = startAt.getHours();
       const client = job.client || {};
       const addr = client.billingAddress;
-      const clientName = client.name || [client.firstName, client.lastName].filter(Boolean).join(' ') || job.title || 'Client Jobber';
       const addrStr = addr ? [addr.street, addr.city, addr.province].filter(Boolean).join(', ') : '';
 
       const { error: upsertErr } = await sb.from('bookings').upsert({
@@ -150,9 +185,9 @@ async function runSync() {
         slot_start: slotLabel(hour),
         slot_start_index: slotIndex(hour),
         duration_hours: durH,
-        client_nom: clientName,
-        client_telephone: client.phones?.[0]?.number || null,
-        client_email: client.emails?.[0]?.address || null,
+        client_nom: client.name || job.title || 'Client Jobber',
+        client_telephone: null,
+        client_email: null,
         client_adresse: addrStr || null,
         services: [],
         prix_final: job.total ? parseFloat(String(job.total)) : null,
@@ -164,7 +199,7 @@ async function runSync() {
       if (upsertErr) errors.push(`Job ${job.jobNumber}: ${upsertErr.message}`);
       else synced++;
     } catch (err: any) {
-      errors.push(`Job ${job.id}: ${err.message}`);
+      errors.push(`${err.message}`);
     }
   }
 
@@ -173,8 +208,8 @@ async function runSync() {
   return {
     success: true,
     synced,
-    total: jobs.length,
-    completed: jobs.filter((j: any) => j.jobStatus === 'COMPLETED').length,
+    total: allJobs.length,
+    completed: allJobs.filter((j: any) => j.jobStatus === 'COMPLETED').length,
     errors: errors.length ? errors.slice(0, 5) : undefined,
     lastSync: syncStart,
   };
