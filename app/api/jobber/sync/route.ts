@@ -9,7 +9,7 @@ const JOBBER_CLIENT_SECRET = process.env.JOBBER_CLIENT_SECRET!;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://si-entretien-pro.vercel.app';
 
 // Jobber tokens expire in 60 minutes — always refresh before syncing
-async function refreshAndGetToken(sb: any): Promise<{ token: string | null; error?: string }> {
+async function refreshAndGetToken(sb: any): Promise<{ token: string | null; error?: string; needsAuth?: boolean }> {
   const { data: row } = await sb.from('oauth_tokens').select('*').eq('id', 'jobber').single();
 
   if (!row) {
@@ -55,7 +55,7 @@ async function refreshAndGetToken(sb: any): Promise<{ token: string | null; erro
 
 async function runSync() {
   const sb = adminClient(SB_URL, SB_SVC);
-  const { token, error: tokenError, needsAuth } = await refreshAndGetToken(sb) as any;
+  const { token, error: tokenError, needsAuth } = await refreshAndGetToken(sb);
 
   if (!token) {
     return { error: tokenError, needsAuth: needsAuth ?? true };
